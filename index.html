@@ -365,6 +365,7 @@
                 <div class="sidebar-tab" data-tab="ogc" onclick="switchTab('ogc')"><i class="fas fa-satellite-dish"></i>OGC</div>
 				<div class="sidebar-tab" data-tab="catastro" onclick="switchTab('catastro')"><i class="fas fa-landmark"></i>PICB</div>
 				<div class="sidebar-tab" data-tab="gps" onclick="switchTab('gps')"><i class="fas fa-user-clock"></i>GPS</div>
+				<div class="sidebar-tab" data-tab="monitor" onclick="switchTab('monitor')"><i class="fas fa-tower-broadcast"></i>Monitor</div>
             </div>
 
             <!-- Panel: Capas -->
@@ -848,7 +849,8 @@
 			<!-- Panel: GPS Personal (seguimiento) -->
 					<div class="sidebar-panel" id="panelGps">
 					  <div class="panel-section">
-						<div class="panel-title">① Conexión Google Sheets</div>
+						<div class="panel-title">① Backend — Google Sheets</div>
+						<input class="input-field" id="gpsUrl" placeholder="https://script.google.com/macros/s/.../exec" style="margin-bottom:6px;">
 						<div style="display:flex;gap:6px;">
 						  <button class="btn-secondary" style="flex:1;padding:6px;font-size:11px;" onclick="GPS.testConn()"><i class="fas fa-plug"></i> Probar conexión</button>
 						  <button class="btn-secondary" style="flex:1;padding:6px;font-size:11px;" id="gpsBtnPoll" onclick="GPS.togglePolling()"><i class="fas fa-play"></i> Iniciar monitoreo</button>
@@ -895,6 +897,43 @@
 						  Cascada de posicionamiento: <b>GPS</b> (±5-25 m) → si falla, <b>SIM/antenas + WiFi</b> (triangulación tipo Google Maps, ±30-2000 m; la app la etiqueta según la precisión recibida). El navegador <b>no puede leer IMEI/MAC automáticamente</b>: se registran manualmente o se usa el ID único generado. Requiere <b>https</b> y permiso de ubicación.</p>
 					  </div>
 					</div>
+
+			<!-- Panel: Centro de Monitoreo -->
+			<div class="sidebar-panel" id="panelMonitor">
+			  <div class="panel-section">
+				<div class="panel-title"><i class="fas fa-tower-broadcast" style="color:var(--accent);"></i> Centro de Monitoreo</div>
+				<input class="input-field" id="monUrl" placeholder="https://script.google.com/macros/s/.../exec" style="margin-bottom:6px;">
+				<div style="display:flex;gap:6px;">
+				  <button class="btn-secondary" style="flex:1;padding:6px;font-size:11px;" onclick="MON.refresh()"><i class="fas fa-rotate"></i> Actualizar</button>
+				  <button class="btn-secondary" style="flex:1;padding:6px;font-size:11px;" id="monBtnAuto" onclick="MON.toggleAuto()"><i class="fas fa-pause"></i> Pausar auto</button>
+				</div>
+				<div id="monStatus" style="font-size:11px;color:var(--text-muted);margin-top:6px;">○ Sin conexión</div>
+			  </div>
+			  <div class="panel-section">
+				<div style="display:flex;gap:6px;text-align:center;">
+				  <div style="flex:1;background:var(--bg-card2);border:1px solid var(--border);border-radius:var(--radius);padding:8px 4px;">
+					<div id="monKpiTotal" style="font-size:20px;font-weight:700;font-family:'Rajdhani';">0</div>
+					<div style="font-size:9px;color:var(--text-muted);letter-spacing:.5px;">CONECTADOS</div>
+				  </div>
+				  <div style="flex:1;background:var(--bg-card2);border:1px solid var(--border);border-radius:var(--radius);padding:8px 4px;">
+					<div id="monKpiOn" style="font-size:20px;font-weight:700;font-family:'Rajdhani';color:var(--accent2);">0</div>
+					<div style="font-size:9px;color:var(--text-muted);letter-spacing:.5px;">EN LÍNEA</div>
+				  </div>
+				  <div style="flex:1;background:var(--bg-card2);border:1px solid var(--border);border-radius:var(--radius);padding:8px 4px;">
+					<div id="monKpiOff" style="font-size:20px;font-weight:700;font-family:'Rajdhani';color:var(--danger);">0</div>
+					<div style="font-size:9px;color:var(--text-muted);letter-spacing:.5px;">SIN SEÑAL</div>
+				  </div>
+				</div>
+			  </div>
+			  <div class="panel-section">
+				<div class="panel-title">Personal conectado</div>
+				<div id="monList"><p style="font-size:12px;color:var(--text-muted);padding:4px 2px;">Esperando datos…</p></div>
+			  </div>
+			  <div class="panel-section">
+				<p class="et-hint"><i class="fas fa-circle-info" style="color:var(--accent);"></i>
+				  Esta consola se actualiza sola cada 15 segundos mientras la pestaña esté abierta. Toca un nombre para centrarlo en el mapa y abrir su ficha; el ícono <i class="fas fa-crosshairs"></i> solo centra. El personal se registra desde la pestaña <b>GPS → ③ Registrar equipo</b>.</p>
+			  </div>
+			</div>
 
             <div class="sidebar-glow"></div>
         </aside>
@@ -2101,6 +2140,7 @@
         window.switchTab = function(tab) {
             document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
             document.querySelectorAll('.sidebar-panel').forEach(p => p.classList.toggle('active', p.id === 'panel' + tab.charAt(0).toUpperCase() + tab.slice(1)));
+            if (typeof MON !== 'undefined') { if (tab === 'monitor') MON.enter(); else if (MON.active) MON.leave(); }
         };
 
         // ===== MODALES =====
@@ -4311,7 +4351,7 @@
 				console.log('GeoVision: PATCH v4 activo ✓ (visibilidad + ficha por secciones + Id resolver)');
 			
 						// ==== TU URL DE GOOGLE SHEETS (fija) ====
-			const GS_MI_URL = 'https://script.google.com/macros/s/AKfycbxHWnqfKky92l9Fc5BXU0qq3bQKpa5PGEnaYklj0smvDlJB0itThN-VUPG3sIe-u-Pzcg/exec';
+			const GS_MI_URL = 'https://script.google.com/macros/s/AKfycby6l3eSpx8qvBfcjMblfuqHL-Wu6NaI-38RnZYI913j-0ji-rskYynF3g9IU_9JlDJf/exec';
 
 			// Precargar la URL en el campo al iniciar
 			const _gsInput = document.getElementById('gsUrl');
@@ -6886,6 +6926,7 @@ ${pm}
     <div class="picb-field"><label>Gmail de la cuenta del equipo</label><input class="input-field" id="trkGmail" placeholder="equipo@gmail.com"></div>
     <div class="picb-field"><label>Número de celular</label><input class="input-field" id="trkPhone" placeholder="+591 ..."></div>
     <div class="picb-field"><label>IMEI (opcional, manual)</label><input class="input-field" id="trkImei" placeholder="Marcar *#06# en el teclado para verlo"></div>
+    <div class="picb-field"><label>URL de Google Sheets (Apps Script)</label><input class="input-field" id="trkUrl" placeholder="https://script.google.com/macros/s/AKfycbycBgVj_20gbwrnliRWlRblnOOuIK0mII27eu4JmCx7tQWq8ikxun8t77TdS8Jiw12krQ/exec"></div>
     <div class="picb-field"><label>Enviar posición cada</label>
       <select class="input-field" id="trkEvery">
         <option value="10">10 segundos</option><option value="15" selected>15 segundos</option>
@@ -6899,8 +6940,6 @@ ${pm}
     </div>
     <button class="btn-secondary" style="width:100%;margin-top:8px;" onclick="GPS.exitHere()"><i class="fas fa-arrow-left"></i> Volver al visor</button>
     <button class="btn-secondary" style="width:100%;margin-top:8px;" onclick="TRK.sendManual()"><i class="fas fa-paper-plane"></i> Enviar posición ahora</button>
-    <button class="btn-primary" style="width:100%;margin-top:8px;padding:12px;" onclick="TRK.sendSMS()"><i class="fas fa-comment-sms"></i> Enviar ubicación por SMS (sin internet)</button>
-    <div id="trkSmsInfo" style="font-size:10px;color:var(--text-muted);margin-top:4px;"></div>
   </div>
   <div class="trk-card">
     <div class="panel-title">Resumen de sesión (cálculo PICB)</div>
@@ -6918,11 +6957,8 @@ ${pm}
 	
 <script>
 /* ============ EMTE-PICB · GPS SEGUIMIENTO DE PERSONAL ============ */
-// Única configuración de la conexión GPS. Usa el /exec del Apps Script de Flutter.
-// Este enlace debe implementar ping, positions, trail, history y la recepción POST.
-const GPS_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxHWnqfKky92l9Fc5BXU0qq3bQKpa5PGEnaYklj0smvDlJB0itThN-VUPG3sIe-u-Pzcg/exec';
 const GPS = {
-  url: GPS_APPS_SCRIPT_URL,
+  url: localStorage.getItem('gpsScriptUrl') || '',
   interval:10, timer:null, polling:false, lastPoll:null, pollCount:0,
   devices:{}, layerMarkers:null, layerTrails:null,
   showTrails:true, trailMin:60, showLabels:true,
@@ -6935,7 +6971,7 @@ GPS.haversine=(la1,lo1,la2,lo2)=>{const R=6371000,r=x=>x*Math.PI/180;const a=Mat
 GPS.fmtDist=m=>m>=1000?(m/1000).toFixed(2)+' km':Math.round(m)+' m';
 GPS.fmtDur=s=>{s=Math.max(0,Math.round(s));const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return (h?h+'h ':'')+(m||h?m+'m ':'')+(s%60)+'s';};
 GPS.fmtAge=t=>{const s=(Date.now()-new Date(t).getTime())/1000;return s<90?Math.round(s)+' s':s<5400?Math.round(s/60)+' min':(s/3600).toFixed(1)+' h';};
-GPS.srcLabel=s=>!s?'—':s.indexOf('SMS')===0?'SMS · mensaje de texto':s.indexOf('GPS')===0?'GPS':s.indexOf('RED')===0?'RED · WiFi/Triang.':'CELDA · SIM';
+GPS.srcLabel=s=>!s?'—':s.indexOf('GPS')===0?'GPS':s.indexOf('RED')===0?'RED · WiFi/Triang.':'CELDA · SIM';
 
 /* JSONP — Apps Script GET sin problemas de CORS */
 GPS.jsonp=params=>new Promise((res,rej)=>{
@@ -6948,14 +6984,14 @@ GPS.jsonp=params=>new Promise((res,rej)=>{
   document.body.appendChild(s);
 });
 
-GPS.setUrl=()=>{GPS.url=GPS_APPS_SCRIPT_URL;};
+GPS.setUrl=v=>{GPS.url=(v||'').trim();localStorage.setItem('gpsScriptUrl',GPS.url);};
 GPS.testConn=async()=>{
   const st=document.getElementById('gpsConnStatus');
-  GPS.setUrl();
-  if(!GPS.url){st.textContent='✗ Conexión no configurada';st.style.color='var(--danger)';return;}
+  GPS.setUrl(document.getElementById('gpsUrl').value);
+  if(!GPS.url){st.textContent='✗ Ingresa la URL /exec';st.style.color='var(--danger)';return;}
   st.textContent='Probando…';st.style.color='var(--text-muted)';
   try{const r=await GPS.jsonp({action:'ping'});
-    if(r&&r.ok){st.textContent='✓ Conectado — servidor listo';st.style.color='var(--accent2)';GPS.toast('Conexión OK','success');}
+    if(r&&r.ok){st.textContent='✓ Conectado — Sheets listo';st.style.color='var(--accent2)';GPS.toast('Conexión OK','success');}
     else throw new Error((r&&r.error)||'respuesta inválida');
   }catch(e){st.textContent='✗ '+e.message;st.style.color='var(--danger)';}
 };
@@ -6966,8 +7002,8 @@ GPS.togglePolling=()=>{
   if(GPS.polling){clearInterval(GPS.timer);GPS.timer=null;GPS.polling=false;
     document.getElementById('gpsBtnPoll').innerHTML='<i class="fas fa-play"></i> Iniciar monitoreo';
     GPS.renderHeader();GPS.toast('Monitoreo detenido');return;}
-  GPS.setUrl();
-  if(!GPS.url){GPS.toast('Conexión no configurada en el código','error');return;}
+  GPS.setUrl(document.getElementById('gpsUrl').value);
+  if(!GPS.url){GPS.toast('Primero pega la URL de Apps Script y prueba la conexión','error');return;}
   GPS.interval=Number(document.getElementById('gpsInterval').value)||10;
   GPS.ensureLayer(); if(!GPS.layerMarkers){GPS.toast('No se encontró el mapa 2D','error');return;}
   GPS.polling=true;document.getElementById('gpsBtnPoll').innerHTML='<i class="fas fa-stop"></i> Detener monitoreo';
@@ -6978,7 +7014,6 @@ GPS.poll=async()=>{
   try{
     const d=await GPS.jsonp({action:'positions',days:7});
     if(!d||!d.ok) throw new Error((d&&d.error)||'sin datos');
-    if(!Array.isArray(d.devices)) throw new Error('El Apps Script no entrega ubicaciones GPS (devices).');
     GPS.lastPoll=Date.now();GPS.pollCount++;
     const seen=new Set();
     (d.devices||[]).forEach(dev=>{
@@ -6991,6 +7026,7 @@ GPS.poll=async()=>{
     Object.keys(GPS.devices).forEach(id=>{if(!seen.has(id))GPS.removeDevice(id);});
     if(GPS.pollCount%2===0) Object.values(GPS.devices).forEach(D=>{if(D.vis&&D.data)GPS.loadTrail(D.id);});
     GPS.renderDevList();GPS.renderHeader();
+    if(MON.active)MON.render();
     if(GPS.openFicha&&GPS.devices[GPS.openFicha])GPS.renderFicha(GPS.openFicha);
     if(GPS.follow&&GPS.devices[GPS.follow]&&GPS.devices[GPS.follow].marker){
       const m=GPS.map();m.setView(GPS.devices[GPS.follow].marker.getLatLng(),Math.max(m.getZoom(),16));}
@@ -7047,6 +7083,71 @@ GPS.renderDevList=()=>{
       '<i class="fas '+(D.vis?'fa-eye':'fa-eye-slash')+' gps-mini" title="Ver/ocultar" onclick="event.stopPropagation();GPS.toggleVis(\''+id+'\')"></i></div>';
   }).join('');
 };
+/* ============ CENTRO DE MONITOREO (consola de conectados) ============ */
+const MON = { active:false, auto:true, timer:null, autoSec:15, loading:false };
+MON.enter = () => {
+  MON.active = true;
+  const u = document.getElementById('monUrl');
+  if (u && !u.value) u.value = GPS.url || '';
+  MON.startAuto(); MON.refresh();
+};
+MON.leave = () => { MON.active = false; MON.stopAuto(); };
+MON.startAuto = () => {
+  MON.stopAuto();
+  if (MON.auto) MON.timer = setInterval(() => MON.refresh(), MON.autoSec * 1000);
+  MON.renderAutoBtn();
+};
+MON.stopAuto = () => { if (MON.timer) { clearInterval(MON.timer); MON.timer = null; } };
+MON.toggleAuto = () => { MON.auto = !MON.auto; MON.startAuto(); };
+MON.renderAutoBtn = () => {
+  const b = document.getElementById('monBtnAuto'); if (!b) return;
+  b.innerHTML = MON.auto ? '<i class="fas fa-pause"></i> Pausar auto' : '<i class="fas fa-play"></i> Reanudar auto';
+};
+MON.isOn = D => D.data && (D.data.online || Number(D.data.mins) <= 15);
+MON.refresh = async () => {
+  const u = document.getElementById('monUrl');
+  if (u && u.value.trim()) GPS.setUrl(u.value);
+  if (!GPS.url) { MON.renderStatus('✗ Pega la URL /exec de Apps Script', 'var(--danger)'); MON.render(); return; }
+  if (MON.loading) return;
+  MON.loading = true;
+  MON.renderStatus('Actualizando…', 'var(--text-muted)');
+  try { await GPS.poll(); } catch (e) {}
+  MON.loading = false;
+  MON.renderStatus(null);
+  MON.render();
+};
+MON.renderStatus = (t, c) => {
+  const el = document.getElementById('monStatus'); if (!el) return;
+  if (t) { el.textContent = t; el.style.color = c || 'var(--text-muted)'; return; }
+  const devs = Object.values(GPS.devices), on = devs.filter(MON.isOn).length;
+  el.innerHTML = '<span style="color:var(--accent2)">● CONECTADO</span> · auto cada ' + MON.autoSec + ' s'
+    + (GPS.lastPoll ? ' · última ' + new Date(GPS.lastPoll).toLocaleTimeString() : '')
+    + ' · <b style="color:var(--text)">' + devs.length + '</b> disp. (<b style="color:var(--accent2)">' + on + '</b> en línea)';
+};
+MON.render = () => {
+  const list = document.getElementById('monList'); if (!list) return;
+  const devs = Object.values(GPS.devices);
+  const on = devs.filter(MON.isOn).length;
+  document.getElementById('monKpiTotal').textContent = devs.length;
+  document.getElementById('monKpiOn').textContent = on;
+  document.getElementById('monKpiOff').textContent = devs.length - on;
+  if (!devs.length) {
+    list.innerHTML = '<p style="font-size:12px;color:var(--text-muted);padding:4px 2px;">Nadie conectado todavía. El personal debe abrir el enlace/QR y pulsar INICIAR (pestaña GPS → ③).</p>';
+    return;
+  }
+  list.innerHTML = devs.slice().sort((a, b) => (MON.isOn(b) ? 1 : 0) - (MON.isOn(a) ? 1 : 0)).map(D => {
+    const d = D.data || {}, isOn = MON.isOn(D);
+    return '<div class="gps-row" onclick="GPS.openDeviceFicha(\'' + D.id + '\')">'
+      + '<span class="gps-dot" style="background:' + D.color + '"></span>'
+      + '<div style="flex:1;min-width:0;">'
+      + '<div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + GPS.devName(d) + '</div>'
+      + '<div class="gps-sub">' + D.id + ' · ' + GPS.srcLabel(d.source) + ' ±' + Math.round(d.acc || 0) + ' m · ' + Number(d.speed || 0).toFixed(1) + ' km/h</div>'
+      + '<div class="gps-sub">Última señal: hace ' + GPS.fmtAge(d.last) + (d.last ? ' (' + new Date(d.last).toLocaleTimeString() + ')' : '') + '</div></div>'
+      + '<span class="gps-badge ' + (isOn ? 'on' : 'off') + '">' + (isOn ? 'EN LÍNEA' : 'OFF ' + (d.mins ?? '?') + 'm') + '</span>'
+      + '<i class="fas fa-crosshairs gps-mini" title="Centrar en mapa" onclick="event.stopPropagation();GPS.centerDev(\'' + D.id + '\')"></i></div>';
+  }).join('');
+};
+
 GPS.renderHeader=err=>{
   const el=document.getElementById('gpsMonStatus');if(!el)return;
   const devs=Object.values(GPS.devices);
@@ -7145,6 +7246,7 @@ GPS.trackerURL=()=>{
   const base=location.href.split('#')[0].split('?')[0];
   let u=base+'?tracker=1';
   if(name)u+='&d='+encodeURIComponent(name);
+  if(GPS.url)u+='&u='+encodeURIComponent(GPS.url);
   return u;
 };
 GPS.showQR=()=>{
@@ -7155,14 +7257,14 @@ GPS.showQR=()=>{
 };
 /* Modo reportante directo: abrir la app en el celular y reportar sin QR */
 GPS.startHere=()=>{
-  GPS.setUrl();
+  GPS.setUrl(document.getElementById('gpsUrl').value);
   const q=new URLSearchParams();
   const n=document.getElementById('gpsNewDevName').value.trim();
-  if(n)q.set('d',n); 
+  if(n)q.set('d',n); if(GPS.url)q.set('u',GPS.url);
   document.body.style.overflow='hidden';
   document.getElementById('trk').style.display='block';
   TRK.init(q);
-  if(!TRK.active)TRK.start();
+  if(!TRK.url)TRK.log('⚠ Pega la URL /exec de Apps Script arriba antes de INICIAR.');
 };
 GPS.exitHere=()=>{
   if(TRK.active&&!confirm('El seguimiento está activo. ¿Detener y volver al visor?'))return;
@@ -7178,7 +7280,8 @@ GPS.copyTrackerURL=()=>{const u=GPS.trackerURL();if(navigator.clipboard)navigato
 const TRK={
   url:'',watchId:null,timer:null,cur:null,last:null,total:0,sent:0,queue:[],session:'',t0:0,batt:null,lock:null,active:false,firstSent:false,
   init(q){
-    this.url=GPS_APPS_SCRIPT_URL;
+    this.url=q.get('u')||localStorage.getItem('gpsScriptUrl')||'';
+    document.getElementById('trkUrl').value=this.url;
     document.getElementById('trkName').value=q.get('d')||localStorage.getItem('trkName')||'';
     document.getElementById('trkGmail').value=localStorage.getItem('trkGmail')||'';
     document.getElementById('trkPhone').value=localStorage.getItem('trkPhone')||'';
@@ -7197,7 +7300,7 @@ const TRK={
   log(m){const el=document.getElementById('trkLog');if(!el)return;
     const d=document.createElement('div');d.textContent=new Date().toLocaleTimeString()+' — '+m;
     el.prepend(d);while(el.children.length>40)el.lastChild.remove();},
-  save(){this.url=GPS_APPS_SCRIPT_URL;
+  save(){this.url=document.getElementById('trkUrl').value.trim();localStorage.setItem('gpsScriptUrl',this.url);
     ['trkName','trkGmail','trkPhone','trkImei'].forEach(id=>localStorage.setItem(id,document.getElementById(id).value.trim()));
     localStorage.setItem('trkDevId',document.getElementById('trkDevId').value.trim());},
   start(){
@@ -7263,19 +7366,6 @@ const TRK={
       .catch(()=>{this.enqueue(row);this.log('⚠ Error de red: en cola ('+this.queue.length+')');});
     this.flush();this.stats();
   },
-  smsNumber(){return localStorage.getItem('emteSmsNumber')||'';},
-  loadSmsNumber(){GPS.jsonp({action:'config'}).then(d=>{if(d&&d.sms){localStorage.setItem('emteSmsNumber',d.sms);}const el=document.getElementById('trkSmsInfo');if(el)el.textContent=d&&d.sms?'Número receptor: '+d.sms:'SMS aún no configurado en el servidor.';}).catch(()=>{const el=document.getElementById('trkSmsInfo');if(el)el.textContent=this.smsNumber()?'Número receptor: '+this.smsNumber()+' (guardado)':'';});},
-  sendSMS(){
-    const go=c=>{const num=this.smsNumber();if(!num){this.log('✗ No hay número SMS configurado todavía.');return;}
-      const g=id=>(document.getElementById(id)||{}).value||'';
-      const body='EMTE GPS '+c.lat.toFixed(6)+','+c.lon.toFixed(6)+' acc='+Math.round(c.acc||0)+' id='+(g('trkDevId')||'')+' nombre='+(g('trkName')||'').replace(/\s+/g,'_');
-      const sep=/iPhone|iPad|iPod/.test(navigator.userAgent)?'&':'?';
-      location.href='sms:'+num+sep+'body='+encodeURIComponent(body);
-      this.log('✉ Abriendo SMS con tu ubicación…');};
-    if(this.cur){go(this.cur);return;}
-    this.log('…obteniendo posición para el SMS');
-    navigator.geolocation.getCurrentPosition(p=>{this.onPos(p);go(this.cur);},e=>this.log('✗ Sin posición: '+e.message),{enableHighAccuracy:true,timeout:30000,maximumAge:60000});
-  },
   sendManual(){if(!this.cur){this.log('…esperando posición');return;}const a=this.active;this.active=true;this.send();this.active=a;},
   enqueue(row){this.queue.push(row);if(this.queue.length>800)this.queue.shift();
     localStorage.setItem('trkQueue',JSON.stringify(this.queue));this.stats();},
@@ -7307,20 +7397,12 @@ const TRK={
 
 /* Init: rellena URL guardada y activa modo reportante si ?tracker=1 */
 (function(){
+  document.getElementById('gpsUrl').value=GPS.url;
   const q=new URLSearchParams(location.search);
-  TRK.loadSmsNumber();
   if(q.get('tracker')==='1'||location.hash==='#tracker'){
     document.body.style.overflow='hidden';
     document.getElementById('trk').style.display='block';
     TRK.init(q);
-    TRK.start();
-  } else {
-    /* Geolocalización automática: este dispositivo reporta y el monitoreo arranca solo */
-    TRK.init(q); TRK.start();
-    let tries=0;const auto=setInterval(()=>{tries++;
-      if(GPS.polling){clearInterval(auto);return;}
-      if(GPS.map()){clearInterval(auto);GPS.togglePolling();}
-      else if(tries>40)clearInterval(auto);},500);
   }
 })();
 </script>
