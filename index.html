@@ -848,8 +848,7 @@
 			<!-- Panel: GPS Personal (seguimiento) -->
 					<div class="sidebar-panel" id="panelGps">
 					  <div class="panel-section">
-						<div class="panel-title">① Servidor — automático (Lovable Cloud)</div>
-						<input class="input-field" id="gpsUrl" readonly style="margin-bottom:6px;">
+						<div class="panel-title">① Conexión Google Sheets</div>
 						<div style="display:flex;gap:6px;">
 						  <button class="btn-secondary" style="flex:1;padding:6px;font-size:11px;" onclick="GPS.testConn()"><i class="fas fa-plug"></i> Probar conexión</button>
 						  <button class="btn-secondary" style="flex:1;padding:6px;font-size:11px;" id="gpsBtnPoll" onclick="GPS.togglePolling()"><i class="fas fa-play"></i> Iniciar monitoreo</button>
@@ -6887,7 +6886,6 @@ ${pm}
     <div class="picb-field"><label>Gmail de la cuenta del equipo</label><input class="input-field" id="trkGmail" placeholder="equipo@gmail.com"></div>
     <div class="picb-field"><label>Número de celular</label><input class="input-field" id="trkPhone" placeholder="+591 ..."></div>
     <div class="picb-field"><label>IMEI (opcional, manual)</label><input class="input-field" id="trkImei" placeholder="Marcar *#06# en el teclado para verlo"></div>
-    <input type="hidden" id="trkUrl">
     <div class="picb-field"><label>Enviar posición cada</label>
       <select class="input-field" id="trkEvery">
         <option value="10">10 segundos</option><option value="15" selected>15 segundos</option>
@@ -6920,8 +6918,11 @@ ${pm}
 	
 <script>
 /* ============ EMTE-PICB · GPS SEGUIMIENTO DE PERSONAL ============ */
+// Única configuración de la conexión GPS. Usa el /exec del Apps Script de Flutter.
+// Este enlace debe implementar ping, positions, trail, history y la recepción POST.
+const GPS_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxHWnqfKky92l9Fc5BXU0qq3bQKpa5PGEnaYklj0smvDlJB0itThN-VUPG3sIe-u-Pzcg/exec';
 const GPS = {
-  url: location.origin+'/api/public/gps',
+  url: GPS_APPS_SCRIPT_URL,
   interval:10, timer:null, polling:false, lastPoll:null, pollCount:0,
   devices:{}, layerMarkers:null, layerTrails:null,
   showTrails:true, trailMin:60, showLabels:true,
@@ -6947,11 +6948,11 @@ GPS.jsonp=params=>new Promise((res,rej)=>{
   document.body.appendChild(s);
 });
 
-GPS.setUrl=v=>{GPS.url=location.origin+'/api/public/gps';};
+GPS.setUrl=()=>{GPS.url=GPS_APPS_SCRIPT_URL;};
 GPS.testConn=async()=>{
   const st=document.getElementById('gpsConnStatus');
-  GPS.setUrl(document.getElementById('gpsUrl').value);
-  if(!GPS.url){st.textContent='✗ Ingresa la URL /exec';st.style.color='var(--danger)';return;}
+  GPS.setUrl();
+  if(!GPS.url){st.textContent='✗ Conexión no configurada';st.style.color='var(--danger)';return;}
   st.textContent='Probando…';st.style.color='var(--text-muted)';
   try{const r=await GPS.jsonp({action:'ping'});
     if(r&&r.ok){st.textContent='✓ Conectado — servidor listo';st.style.color='var(--accent2)';GPS.toast('Conexión OK','success');}
@@ -6965,8 +6966,8 @@ GPS.togglePolling=()=>{
   if(GPS.polling){clearInterval(GPS.timer);GPS.timer=null;GPS.polling=false;
     document.getElementById('gpsBtnPoll').innerHTML='<i class="fas fa-play"></i> Iniciar monitoreo';
     GPS.renderHeader();GPS.toast('Monitoreo detenido');return;}
-  GPS.setUrl(document.getElementById('gpsUrl').value);
-  if(!GPS.url){GPS.toast('Primero pega la URL de Apps Script y prueba la conexión','error');return;}
+  GPS.setUrl();
+  if(!GPS.url){GPS.toast('Conexión no configurada en el código','error');return;}
   GPS.interval=Number(document.getElementById('gpsInterval').value)||10;
   GPS.ensureLayer(); if(!GPS.layerMarkers){GPS.toast('No se encontró el mapa 2D','error');return;}
   GPS.polling=true;document.getElementById('gpsBtnPoll').innerHTML='<i class="fas fa-stop"></i> Detener monitoreo';
@@ -6977,6 +6978,7 @@ GPS.poll=async()=>{
   try{
     const d=await GPS.jsonp({action:'positions',days:7});
     if(!d||!d.ok) throw new Error((d&&d.error)||'sin datos');
+    if(!Array.isArray(d.devices)) throw new Error('El Apps Script no entrega ubicaciones GPS (devices).');
     GPS.lastPoll=Date.now();GPS.pollCount++;
     const seen=new Set();
     (d.devices||[]).forEach(dev=>{
@@ -7153,7 +7155,7 @@ GPS.showQR=()=>{
 };
 /* Modo reportante directo: abrir la app en el celular y reportar sin QR */
 GPS.startHere=()=>{
-  GPS.setUrl(document.getElementById('gpsUrl').value);
+  GPS.setUrl();
   const q=new URLSearchParams();
   const n=document.getElementById('gpsNewDevName').value.trim();
   if(n)q.set('d',n); 
@@ -7176,8 +7178,7 @@ GPS.copyTrackerURL=()=>{const u=GPS.trackerURL();if(navigator.clipboard)navigato
 const TRK={
   url:'',watchId:null,timer:null,cur:null,last:null,total:0,sent:0,queue:[],session:'',t0:0,batt:null,lock:null,active:false,firstSent:false,
   init(q){
-    this.url=location.origin+'/api/public/gps';
-    document.getElementById('trkUrl').value=this.url;
+    this.url=GPS_APPS_SCRIPT_URL;
     document.getElementById('trkName').value=q.get('d')||localStorage.getItem('trkName')||'';
     document.getElementById('trkGmail').value=localStorage.getItem('trkGmail')||'';
     document.getElementById('trkPhone').value=localStorage.getItem('trkPhone')||'';
@@ -7196,7 +7197,7 @@ const TRK={
   log(m){const el=document.getElementById('trkLog');if(!el)return;
     const d=document.createElement('div');d.textContent=new Date().toLocaleTimeString()+' — '+m;
     el.prepend(d);while(el.children.length>40)el.lastChild.remove();},
-  save(){this.url=location.origin+'/api/public/gps';
+  save(){this.url=GPS_APPS_SCRIPT_URL;
     ['trkName','trkGmail','trkPhone','trkImei'].forEach(id=>localStorage.setItem(id,document.getElementById(id).value.trim()));
     localStorage.setItem('trkDevId',document.getElementById('trkDevId').value.trim());},
   start(){
@@ -7263,7 +7264,7 @@ const TRK={
     this.flush();this.stats();
   },
   smsNumber(){return localStorage.getItem('emteSmsNumber')||'';},
-  loadSmsNumber(){fetch(location.origin+'/api/public/gps?action=config').then(r=>r.json()).then(d=>{if(d&&d.sms){localStorage.setItem('emteSmsNumber',d.sms);}const el=document.getElementById('trkSmsInfo');if(el)el.textContent=d&&d.sms?'Número receptor: '+d.sms:'SMS aún no configurado en el servidor.';}).catch(()=>{const el=document.getElementById('trkSmsInfo');if(el)el.textContent=this.smsNumber()?'Número receptor: '+this.smsNumber()+' (guardado)':'';});},
+  loadSmsNumber(){GPS.jsonp({action:'config'}).then(d=>{if(d&&d.sms){localStorage.setItem('emteSmsNumber',d.sms);}const el=document.getElementById('trkSmsInfo');if(el)el.textContent=d&&d.sms?'Número receptor: '+d.sms:'SMS aún no configurado en el servidor.';}).catch(()=>{const el=document.getElementById('trkSmsInfo');if(el)el.textContent=this.smsNumber()?'Número receptor: '+this.smsNumber()+' (guardado)':'';});},
   sendSMS(){
     const go=c=>{const num=this.smsNumber();if(!num){this.log('✗ No hay número SMS configurado todavía.');return;}
       const g=id=>(document.getElementById(id)||{}).value||'';
@@ -7306,7 +7307,6 @@ const TRK={
 
 /* Init: rellena URL guardada y activa modo reportante si ?tracker=1 */
 (function(){
-  document.getElementById('gpsUrl').value=GPS.url;
   const q=new URLSearchParams(location.search);
   TRK.loadSmsNumber();
   if(q.get('tracker')==='1'||location.hash==='#tracker'){
