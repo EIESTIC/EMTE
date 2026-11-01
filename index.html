@@ -6918,6 +6918,7 @@ ${pm}
     <div class="trk-stat"><span>Posición</span><b id="trkPos">— , —</b></div>
     <div class="trk-stat"><span>Precisión</span><b id="trkAcc">—</b></div>
     <div class="trk-stat"><span>Origen de la posición</span><b id="trkSrc">—</b></div>
+    <div class="trk-stat"><span>Modo (GPS → WiFi → Red móvil → SMS)</span><b id="trkMode">—</b></div>
   </div>
   <div class="trk-card">
     <div class="panel-title">Identificación del dispositivo</div>
@@ -6927,6 +6928,8 @@ ${pm}
     <div class="picb-field"><label>Número de celular</label><input class="input-field" id="trkPhone" placeholder="+591 ..."></div>
     <div class="picb-field"><label>IMEI (opcional, manual)</label><input class="input-field" id="trkImei" placeholder="Marcar *#06# en el teclado para verlo"></div>
     <div class="picb-field"><label>URL de Google Sheets (Apps Script)</label><input class="input-field" id="trkUrl" placeholder="https://script.google.com/macros/s/AKfycbycBgVj_20gbwrnliRWlRblnOOuIK0mII27eu4JmCx7tQWq8ikxun8t77TdS8Jiw12krQ/exec"></div>
+    <div class="picb-field"><label>N° de la central para SMS (respaldo sin internet)</label><input class="input-field" id="trkSmsTo" placeholder="+591 7xxxxxxx"></div>
+    <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-muted);margin-bottom:8px;"><input type="checkbox" id="trkSmsAuto" checked> Preparar SMS automáticamente si no hay internet (máx. 1 cada 5 min)</label>
     <div class="picb-field"><label>Enviar posición cada</label>
       <select class="input-field" id="trkEvery">
         <option value="10">10 segundos</option><option value="15" selected>15 segundos</option>
@@ -6940,6 +6943,7 @@ ${pm}
     </div>
     <button class="btn-secondary" style="width:100%;margin-top:8px;" onclick="GPS.exitHere()"><i class="fas fa-arrow-left"></i> Volver al visor</button>
     <button class="btn-secondary" style="width:100%;margin-top:8px;" onclick="TRK.sendManual()"><i class="fas fa-paper-plane"></i> Enviar posición ahora</button>
+    <button class="btn-secondary" style="width:100%;margin-top:8px;" onclick="TRK.sendSms(true)"><i class="fas fa-comment-sms"></i> Enviar ubicación por SMS</button>
   </div>
   <div class="trk-card">
     <div class="panel-title">Resumen de sesión (cálculo PICB)</div>
@@ -6951,7 +6955,7 @@ ${pm}
   </div>
   <div class="trk-card"><div class="panel-title">Registro</div><div id="trkLog"></div></div>
   <p style="font-size:10px;color:var(--text-muted);line-height:1.5;margin-bottom:24px;">
-    Mantén esta pestaña abierta. Con GPS se reporta con alta precisión; sin GPS el navegador usa las antenas del SIM y redes WiFi (triangulación tipo Google Maps). Los puntos sin señal se encolan y se envían al reconectar.
+    Mantén esta pestaña abierta y activa la Ubicación PRECISA del teléfono. Prioridad: 1) GPS (±2-25 m, con filtrado y promedio); 2) WiFi (±20-150 m); 3) Red móvil/antenas o IP del operador (±150-5000 m); 4) sin internet: SMS desde la SIM a la central. Los puntos sin red se encolan y se envían al reconectar.
   </p>
 </div>
 	
@@ -6971,7 +6975,7 @@ GPS.haversine=(la1,lo1,la2,lo2)=>{const R=6371000,r=x=>x*Math.PI/180;const a=Mat
 GPS.fmtDist=m=>m>=1000?(m/1000).toFixed(2)+' km':Math.round(m)+' m';
 GPS.fmtDur=s=>{s=Math.max(0,Math.round(s));const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return (h?h+'h ':'')+(m||h?m+'m ':'')+(s%60)+'s';};
 GPS.fmtAge=t=>{const s=(Date.now()-new Date(t).getTime())/1000;return s<90?Math.round(s)+' s':s<5400?Math.round(s/60)+' min':(s/3600).toFixed(1)+' h';};
-GPS.srcLabel=s=>!s?'—':s.indexOf('GPS')===0?'GPS':s.indexOf('RED')===0?'RED · WiFi/Triang.':'CELDA · SIM';
+GPS.srcLabel=s=>!s?'—':s.indexOf('GPS')===0?'GPS':s.indexOf('RED')===0?'WiFi':s.indexOf('SMS')===0?'SMS':'RED MÓVIL';
 
 /* JSONP — Apps Script GET sin problemas de CORS */
 GPS.jsonp=params=>new Promise((res,rej)=>{
@@ -7278,102 +7282,190 @@ GPS.copyTrackerURL=()=>{const u=GPS.trackerURL();if(navigator.clipboard)navigato
 
 /* ============ MODO REPORTANTE (el celular) ============ */
 const TRK={
-  url:'',watchId:null,timer:null,cur:null,last:null,total:0,sent:0,queue:[],session:'',t0:0,batt:null,lock:null,active:false,firstSent:false,
+  url:'',watchId:null,timer:null,fbTimer:null,cur:null,last:null,total:0,sent:0,queue:[],session:'',t0:0,batt:null,lock:null,active:false,firstSent:false,
+  samples:[],lastGpsT:0,mode:'—',lastSms:0,offlineSince:0,
+  GPS_ACC:30,GPS_TIMEOUT:25000,
   init(q){
     this.url=q.get('u')||localStorage.getItem('gpsScriptUrl')||'';
     document.getElementById('trkUrl').value=this.url;
     document.getElementById('trkName').value=q.get('d')||localStorage.getItem('trkName')||'';
-    document.getElementById('trkGmail').value=localStorage.getItem('trkGmail')||'';
-    document.getElementById('trkPhone').value=localStorage.getItem('trkPhone')||'';
-    document.getElementById('trkImei').value=localStorage.getItem('trkImei')||'';
+    ['trkGmail','trkPhone','trkImei'].forEach(id=>document.getElementById(id).value=localStorage.getItem(id)||'');
+    document.getElementById('trkSmsTo').value=q.get('s')||localStorage.getItem('trkSmsTo')||'';
+    document.getElementById('trkSmsAuto').checked=localStorage.getItem('trkSmsAuto')!=='0';
     if(!localStorage.getItem('trkDevId'))
       localStorage.setItem('trkDevId','DEV-'+Date.now().toString(36).toUpperCase()+'-'+Math.random().toString(36).slice(2,6).toUpperCase());
     document.getElementById('trkDevId').value=localStorage.getItem('trkDevId');
     this.queue=JSON.parse(localStorage.getItem('trkQueue')||'[]');
     this.ui();this.log('Listo. Completa tus datos y pulsa INICIAR.');
     if(!navigator.geolocation)this.log('✗ Este navegador NO soporta geolocalización.');
-    if(!navigator.onLine)this.log('⚠ Sin conexión ahora mismo; los puntos se encolarán.');
+    if(!navigator.onLine)this.log('⚠ Sin conexión ahora mismo; se usará cola + SMS.');
     if(this._bound)return; this._bound=true;
-    window.addEventListener('online',()=>{this.log('↺ Conexión restablecida');this.flush();});
-    window.addEventListener('offline',()=>this.log('⚠ Sin conexión: los puntos se encolan.'));
+    window.addEventListener('online',()=>{this.offlineSince=0;this.log('↺ Conexión restablecida');this.flush();});
+    window.addEventListener('offline',()=>{this.offlineSince=Date.now();this.log('⚠ Sin internet: los puntos se encolan y se avisará por SMS.');});
+    document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&this.active&&navigator.wakeLock&&!this.lock)
+      navigator.wakeLock.request('screen').then(l=>this.lock=l).catch(()=>{});});
   },
   log(m){const el=document.getElementById('trkLog');if(!el)return;
     const d=document.createElement('div');d.textContent=new Date().toLocaleTimeString()+' — '+m;
-    el.prepend(d);while(el.children.length>40)el.lastChild.remove();},
+    el.prepend(d);while(el.children.length>60)el.lastChild.remove();},
   save(){this.url=document.getElementById('trkUrl').value.trim();localStorage.setItem('gpsScriptUrl',this.url);
-    ['trkName','trkGmail','trkPhone','trkImei'].forEach(id=>localStorage.setItem(id,document.getElementById(id).value.trim()));
+    ['trkName','trkGmail','trkPhone','trkImei','trkSmsTo'].forEach(id=>localStorage.setItem(id,document.getElementById(id).value.trim()));
+    localStorage.setItem('trkSmsAuto',document.getElementById('trkSmsAuto').checked?'1':'0');
     localStorage.setItem('trkDevId',document.getElementById('trkDevId').value.trim());},
+  netType(){const c=navigator.connection||navigator.mozConnection||navigator.webkitConnection;return c&&c.type?c.type:'';},
+
+  /* ---------- CASCADA: 1 GPS → 2 WiFi → 3 Red móvil → 4 SMS ---------- */
   start(){
     this.save();
-    if(!this.url){this.log('✗ Falta la URL de Apps Script.');return;}
+    if(!this.url)this.log('⚠ Sin URL de Apps Script: solo se podrá reportar por SMS.');
     if(!navigator.geolocation){this.log('✗ Geolocalización no disponible.');return;}
     this.session=localStorage.getItem('trkDevId')+'-'+Date.now().toString(36);
-    this.t0=Date.now();this.total=0;this.sent=0;this.firstSent=false;this.active=true;
-    this.watchId=navigator.geolocation.watchPosition(p=>this.onPos(p),e=>this.onErr(e),
-      {enableHighAccuracy:true,maximumAge:2000,timeout:20000});
+    this.t0=Date.now();this.total=0;this.sent=0;this.firstSent=false;this.active=true;this.samples=[];this.lastGpsT=0;this.last=null;
+    this.setMode('Buscando GPS…');
+    // 1) GPS: siempre activo, alta precisión, sin caché → recupera prioridad apenas haya satélites
+    this.watchId=navigator.geolocation.watchPosition(p=>this.onRaw(p,'watch'),e=>this.onErr(e),
+      {enableHighAccuracy:true,maximumAge:0,timeout:this.GPS_TIMEOUT});
     this.timer=setInterval(()=>this.send(),(Number(document.getElementById('trkEvery').value)||15)*1000);
+    this.fbTimer=setInterval(()=>this.watchdog(),5000);
     if(navigator.getBattery)navigator.getBattery().then(b=>{this.batt=Math.round(b.level*100);b.onlevelchange=()=>this.batt=Math.round(b.level*100);}).catch(()=>{});
-    if(navigator.wakeLock)navigator.wakeLock.request('screen').then(l=>this.lock=l).catch(()=>{});
-    this.log('▶ Seguimiento iniciado (GPS alta precisión).');
+    if(navigator.wakeLock)navigator.wakeLock.request('screen').then(l=>{this.lock=l;l.onrelease=()=>this.lock=null;}).catch(()=>{});
+    this.log('▶ Seguimiento iniciado. Prioridad: GPS → WiFi → Red móvil → SMS.');
     this.ui();
   },
   stop(){
     this.active=false;
     if(this.watchId!=null){navigator.geolocation.clearWatch(this.watchId);this.watchId=null;}
-    clearInterval(this.timer);this.timer=null;
+    clearInterval(this.timer);this.timer=null;clearInterval(this.fbTimer);this.fbTimer=null;
     if(this.lock){this.lock.release().catch(()=>{});this.lock=null;}
-    this.log('■ Seguimiento detenido.');this.ui();
+    this.setMode('—');this.log('■ Seguimiento detenido.');this.ui();
   },
-  onPos(p){
-    this.cur={lat:p.coords.latitude,lon:p.coords.longitude,acc:p.coords.accuracy,
-      speed:p.coords.speed,heading:p.coords.heading,alt:p.coords.altitude,t:Date.now()};
-    const c=this.cur;
-    if(this.last){
-      const d=GPS.haversine(this.last.lat,this.last.lon,c.lat,c.lon),dt=(c.t-this.last.t)/1000;
-      if(d>800&&dt<30)this.log('⚠ Salto GPS descartado ('+Math.round(d)+' m en '+dt.toFixed(0)+' s)');
-      else if(d>3)this.total+=d;
+  // Si no hay fix GPS reciente, pide posición por red (WiFi o antenas) y, si falla, por IP de la red móvil
+  watchdog(){
+    if(!this.active)return;
+    const gpsOk=this.lastGpsT&&Date.now()-this.lastGpsT<this.GPS_TIMEOUT;
+    if(gpsOk||this._fbBusy)return;
+    if(Date.now()-this.t0<this.GPS_TIMEOUT&&!this.cur)return; // dar tiempo al GPS en el arranque
+    this._fbBusy=true;
+    navigator.geolocation.getCurrentPosition(
+      p=>{this._fbBusy=false;this.onRaw(p,'net');},
+      ()=>{this._fbBusy=false;this.ipFallback();},
+      {enableHighAccuracy:false,maximumAge:15000,timeout:15000});
+  },
+  async ipFallback(){
+    if(!navigator.onLine){this.setMode('SIN SEÑAL → SMS');this.maybeSms();return;}
+    if(this._ipT&&Date.now()-this._ipT<60000)return; this._ipT=Date.now();
+    try{
+      const r=await fetch('https://ipapi.co/json/',{cache:'no-store'});const j=await r.json();
+      if(j&&j.latitude){this.log('↺ Ubicación aproximada por red móvil (IP del operador).');
+        this.accept({lat:j.latitude,lon:j.longitude,acc:5000,speed:null,heading:null,alt:null,t:Date.now(),src:'CELDA · Red móvil (IP)'});}
+    }catch(_){this.log('…sin GPS, WiFi ni red móvil; reintentando…');}
+  },
+  onRaw(p,how){
+    const c=p.coords;
+    if(!isFinite(c.latitude)||!isFinite(c.longitude)||!(c.accuracy>0))return;
+    const s={lat:c.latitude,lon:c.longitude,acc:c.accuracy,speed:c.speed,heading:c.heading,alt:c.altitude,
+      altAcc:c.altitudeAccuracy,t:p.timestamp||Date.now()};
+    if(s.acc<=this.GPS_ACC){s.src='GPS';this.lastGpsT=Date.now();}
+    else{
+      // Una lectura del watch de alta precisión con mala precisión = GPS aún sin fix; no reemplaza un GPS reciente
+      if(this.lastGpsT&&Date.now()-this.lastGpsT<this.GPS_TIMEOUT)return;
+      const nt=this.netType();
+      if(nt==='wifi'||nt==='ethernet')s.src='RED · WiFi';
+      else if(nt==='cellular')s.src=s.acc<=150?'RED · WiFi (escaneo)':'CELDA · Red móvil (antenas)';
+      else s.src=s.acc<=150?'RED · WiFi':'CELDA · Red móvil (antenas)';
     }
-    this.last=c;
-    document.getElementById('trkPos').textContent=c.lat.toFixed(6)+', '+c.lon.toFixed(6);
-    document.getElementById('trkAcc').textContent='± '+Math.round(c.acc)+' m';
-    document.getElementById('trkSrc').textContent=this.classify(c.acc);
-    if(this.active&&!this.firstSent){this.firstSent=true;this.send();}
+    this.accept(s);
+  },
+  // Filtro de precisión: descarta saltos imposibles y promedia ponderando por 1/precisión²
+  accept(s){
+    const prev=this.cur;
+    if(prev){
+      const d=GPS.haversine(prev.lat,prev.lon,s.lat,s.lon),dt=Math.max(1,(s.t-prev.t)/1000);
+      const slack=prev.acc+s.acc;
+      if(d>slack&&d/dt>70){this.log('⚠ Salto descartado ('+Math.round(d)+' m en '+dt.toFixed(0)+' s)');return;}
+      if(prev.src==='GPS'&&s.src!=='GPS'&&s.t-prev.t<this.GPS_TIMEOUT)return;
+    }
+    const now=Date.now();
+    this.samples=this.samples.filter(x=>now-x.t<8000&&x.src===s.src);this.samples.push(s);
+    const moving=s.speed!=null&&s.speed>1.5;
+    let out=s;
+    if(s.src==='GPS'&&!moving&&this.samples.length>1){
+      const best=Math.min(...this.samples.map(x=>x.acc)),use=this.samples.filter(x=>x.acc<=best*2);
+      let w=0,la=0,lo=0;use.forEach(x=>{const k=1/(x.acc*x.acc);w+=k;la+=x.lat*k;lo+=x.lon*k;});
+      out={...s,lat:la/w,lon:lo/w,acc:Math.max(best/Math.sqrt(use.length),2)};
+    }
+    if(this.last&&out.src==='GPS'&&this.last.src==='GPS'){
+      const d=GPS.haversine(this.last.lat,this.last.lon,out.lat,out.lon);
+      if(d>Math.max(3,out.acc*0.5))this.total+=d;
+    }
+    if(out.src==='GPS'||!this.last||this.last.src!=='GPS')this.last=out;
+    this.cur=out;this.setMode(out.src);
+    document.getElementById('trkPos').textContent=out.lat.toFixed(6)+', '+out.lon.toFixed(6);
+    document.getElementById('trkAcc').textContent='± '+(out.acc<10?out.acc.toFixed(1):Math.round(out.acc))+' m';
+    document.getElementById('trkSrc').textContent=out.src;
+    if(this.active&&!this.firstSent&&(out.src==='GPS'&&out.acc<=15||now-this.t0>this.GPS_TIMEOUT)){this.firstSent=true;this.send();}
     this.stats();
   },
-  classify(acc){if(acc<=25)return 'GPS';if(acc<=300)return 'RED (WiFi/triangulación)';return 'CELDA (SIM/antena)';},
+  setMode(m){if(this.mode!==m){this.mode=m;if(m!=='—'&&this.active)this.log('◎ Fuente de posición: '+m);}
+    const el=document.getElementById('trkMode');if(el)el.textContent=m;},
+  classify(acc){if(acc<=this.GPS_ACC)return 'GPS';if(acc<=150)return 'RED · WiFi';return 'CELDA · Red móvil';},
   onErr(e){
-    const M={1:'Permiso DENEGADO: habilita Ubicación para este navegador.',2:'Posición no disponible.',3:'Tiempo de espera agotado.'};
+    const M={1:'Permiso DENEGADO: habilita Ubicación (precisa) para este navegador.',2:'GPS no disponible; probando WiFi / red móvil…',3:'GPS sin respuesta; probando WiFi / red móvil…'};
     this.log('✗ '+(M[e.code]||e.message));
-    navigator.geolocation.getCurrentPosition(p=>{this.log('↺ Posición por red obtenida (sin GPS).');this.onPos(p);},
-      ()=>this.log('…sin GPS ni red todavía; reintentando…'),{enableHighAccuracy:false,timeout:25000,maximumAge:60000});
+    if(e.code!==1){this.lastGpsT=0;this.watchdog();}
   },
   buildRow(){
     const c=this.cur,g=id=>document.getElementById(id).value.trim();
     return {devId:g('trkDevId'),name:g('trkName'),gmail:g('trkGmail'),phone:g('trkPhone'),imei:g('trkImei'),mac:'',
-      lat:c.lat,lon:c.lon,acc:c.acc,source:this.classify(c.acc),
+      lat:+c.lat.toFixed(7),lon:+c.lon.toFixed(7),acc:Math.round(c.acc*10)/10,source:c.src||this.classify(c.acc),
       speed:(c.speed!=null&&!isNaN(c.speed))?c.speed*3.6:0,
       heading:(c.heading!=null&&!isNaN(c.heading))?Math.round(c.heading):'',
       alt:(c.alt!=null&&!isNaN(c.alt))?Math.round(c.alt):'',batt:this.batt,
-      totalDist:Math.round(this.total),session:this.session,note:''};
+      totalDist:Math.round(this.total),session:this.session,note:'net:'+(this.netType()||'?')+' fixAge:'+Math.round((Date.now()-c.t)/1000)+'s'};
   },
   send(){
     if(!this.active)return;
-    if(!this.cur){this.log('…esperando primera posición');return;}
+    if(!this.cur){this.log('…esperando primera posición');if(!navigator.onLine)this.maybeSms();return;}
     const row=this.buildRow();
-    if(!navigator.onLine){this.enqueue(row);this.log('⚠ Sin red: punto en cola ('+this.queue.length+')');this.stats();return;}
+    if(!navigator.onLine||!this.url){this.enqueue(row);this.log('⚠ Sin internet: punto en cola ('+this.queue.length+')');
+      if(!this.offlineSince)this.offlineSince=Date.now();this.maybeSms();this.stats();return;}
     fetch(this.url,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(row)})
-      .then(()=>{this.sent++;this.log('✓ Punto enviado — '+row.source+' ±'+Math.round(row.acc)+' m');})
-      .catch(()=>{this.enqueue(row);this.log('⚠ Error de red: en cola ('+this.queue.length+')');});
+      .then(()=>{this.sent++;this.log('✓ Enviado — '+row.source+' ±'+row.acc+' m');})
+      .catch(()=>{this.enqueue(row);this.log('⚠ Error de red: en cola ('+this.queue.length+')');this.maybeSms();});
     this.flush();this.stats();
+  },
+  /* 4) SMS por la SIM: el navegador abre la app de mensajes con el texto listo (el usuario solo pulsa Enviar) */
+  smsBody(){
+    const c=this.cur||this.last,g=id=>document.getElementById(id).value.trim();
+    if(!c)return 'EMTE GPS | '+g('trkDevId')+' | '+g('trkName')+' | SIN POSICION | '+new Date().toLocaleString();
+    return 'EMTE GPS | '+g('trkDevId')+' | '+g('trkName')+' | '+c.lat.toFixed(6)+','+c.lon.toFixed(6)+
+      ' | ±'+Math.round(c.acc)+'m | '+(c.src||'')+' | '+new Date(c.t).toLocaleString()+
+      ' | https://maps.google.com/?q='+c.lat.toFixed(6)+','+c.lon.toFixed(6);
+  },
+  sendSms(manual){
+    const to=document.getElementById('trkSmsTo').value.trim().replace(/[^\d+]/g,'');
+    if(!to){this.log('✗ Configura el número de la central para SMS.');return;}
+    this.lastSms=Date.now();
+    const sep=/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)?'&':'?';
+    location.href='sms:'+to+sep+'body='+encodeURIComponent(this.smsBody());
+    this.log('✉ SMS preparado'+(manual?'':' (automático, sin internet)')+': pulsa Enviar en Mensajes.');
+  },
+  maybeSms(){
+    if(!document.getElementById('trkSmsAuto').checked)return;
+    if(!document.getElementById('trkSmsTo').value.trim())return;
+    if(this.offlineSince&&Date.now()-this.offlineSince<60000)return; // 1 min sin internet antes de recurrir al SMS
+    if(Date.now()-this.lastSms<5*60000)return;                       // como máximo 1 SMS cada 5 min
+    if(document.visibilityState!=='visible')return;
+    this.sendSms(false);
   },
   sendManual(){if(!this.cur){this.log('…esperando posición');return;}const a=this.active;this.active=true;this.send();this.active=a;},
   enqueue(row){this.queue.push(row);if(this.queue.length>800)this.queue.shift();
     localStorage.setItem('trkQueue',JSON.stringify(this.queue));this.stats();},
   flush(){
-    if(!this.queue.length||!navigator.onLine)return;
+    if(!this.queue.length||!navigator.onLine||!this.url)return;
     const batch=this.queue.splice(0,50);
     fetch(this.url,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({batch})})
-      .then(()=>{this.log('✓ Cola sincronizada ('+batch.length+' puntos)');localStorage.setItem('trkQueue','[]');})
+      .then(()=>{this.log('✓ Cola sincronizada ('+batch.length+' puntos)');localStorage.setItem('trkQueue',JSON.stringify(this.queue));})
       .catch(()=>{this.queue=batch.concat(this.queue);localStorage.setItem('trkQueue',JSON.stringify(this.queue));});
     this.stats();
   },
